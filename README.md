@@ -117,6 +117,6 @@ MIT
 
 ## Author
 
-**Morpheus77**  
+**Morpheus**  
 
 GitHub: [https://github.com/DevMorph77]
