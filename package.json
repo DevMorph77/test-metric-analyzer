@@ -1,0 +1,22 @@
+{
+  "name": "test-metrics-analyzer",
+  "version": "1.0.13",
+  "description": "CLI tool to generate and view metrics from Playwright test suites",
+  "main": "index.js",
+  "bin": {
+    "playwright-test-metrics-analyzer": "index.js"
+  },
+  "keywords": [
+    "playwright",
+    "test",
+    "metrics",
+    "reporting"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "@babel/parser": "^7.27.2",
+    "express": "^5.1.0",
+    "recast": "^0.20.5"
+  }
+}
