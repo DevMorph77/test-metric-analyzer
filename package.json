@@ -1,6 +1,6 @@
 {
   "name": "test-metrics-analyzer",
-  "version": "1.0.18",
+  "version": "1.0.19",
   "description": "CLI tool to generate and view metrics from Playwright test suites",
   "main": "index.js",
   "bin": {
