@@ -5,7 +5,7 @@ const path = require("path");
 const recast = require("recast");
 const babelParser = require("@babel/parser");
 const express = require("express");
-const htmlTemplate = require("./lib/html-template");
+const htmlTemplate = require('./lib/html-template');
 
 const parser = {
   parse(source) {
@@ -16,7 +16,7 @@ const parser = {
   },
 };
 
-function analyzeFile(filePath, visitedFiles, stats) {
+function analyzeFile(filePath, visitedFiles, stats, perFileStats) {
   if (visitedFiles.has(filePath)) return;
   visitedFiles.add(filePath);
 
@@ -34,55 +34,41 @@ function analyzeFile(filePath, visitedFiles, stats) {
     return;
   }
 
-  const functionImportMap = new Map(); // functionName -> sourceFilePath
+  // Initialize stats for this file
+  perFileStats[filePath] = perFileStats[filePath] || {
+    totalTests: 0,
+    totalTestSteps: 0,
+  };
 
   recast.types.visit(ast, {
     visitImportDeclaration(pathNode) {
       const importPath = pathNode.node.source.value;
-      if (!importPath.startsWith(".")) {
-        this.traverse(pathNode);
-        return;
-      }
+      if (importPath.startsWith(".")) {
+        const dir = path.dirname(filePath);
+        const resolvedPath = path.resolve(dir, importPath);
+        const candidates = [
+          resolvedPath,
+          resolvedPath + ".ts",
+          resolvedPath + ".js",
+          path.join(resolvedPath, "index.ts"),
+          path.join(resolvedPath, "index.js"),
+        ];
 
-      const dir = path.dirname(filePath);
-      const resolvedPath = path.resolve(dir, importPath);
-      const candidates = [
-        resolvedPath,
-        resolvedPath + ".ts",
-        resolvedPath + ".js",
-        path.join(resolvedPath, "index.ts"),
-        path.join(resolvedPath, "index.js"),
-      ];
-
-      let actualPath;
-      for (const candidate of candidates) {
-        if (fs.existsSync(candidate)) {
-          actualPath = candidate;
-          break;
-        }
-      }
-
-      if (actualPath) {
-        for (const specifier of pathNode.node.specifiers) {
-          if (
-            specifier.type === "ImportDefaultSpecifier" ||
-            specifier.type === "ImportSpecifier"
-          ) {
-            functionImportMap.set(specifier.local.name, actualPath);
+        for (const candidate of candidates) {
+          if (fs.existsSync(candidate)) {
+            analyzeFile(candidate, visitedFiles, stats, perFileStats);
+            break;
           }
         }
-        analyzeFile(actualPath, visitedFiles, stats);
       }
-
       this.traverse(pathNode);
     },
 
     visitCallExpression(pathNode) {
       const callee = pathNode.node.callee;
-
-      // Count test() and test.step()
       if (callee?.type === "Identifier" && callee.name === "test") {
         stats.totalTests++;
+        perFileStats[filePath].totalTests++;
       }
       if (
         callee?.type === "MemberExpression" &&
@@ -90,17 +76,8 @@ function analyzeFile(filePath, visitedFiles, stats) {
         callee.property?.name === "step"
       ) {
         stats.totalTestSteps++;
+        perFileStats[filePath].totalTestSteps++;
       }
-
-      // Handle function calls like Dashboard(), QC(), etc.
-      if (callee?.type === "Identifier") {
-        const funcName = callee.name;
-        const targetFile = functionImportMap.get(funcName);
-        if (targetFile) {
-          analyzeFile(targetFile, visitedFiles, stats); // Recursive again!
-        }
-      }
-
       this.traverse(pathNode);
     },
   });
@@ -109,13 +86,15 @@ function analyzeFile(filePath, visitedFiles, stats) {
 function analyzeSpecFile(entryFilePath) {
   const visitedFiles = new Set();
   const stats = { totalTests: 0, totalTestSteps: 0 };
+  const perFileStats = {};
 
-  analyzeFile(entryFilePath, visitedFiles, stats);
+  analyzeFile(entryFilePath, visitedFiles, stats, perFileStats);
 
   return {
     totalTests: stats.totalTests,
     totalTestSteps: stats.totalTestSteps,
     totalTestCases: stats.totalTestSteps,
+    files: perFileStats,
   };
 }
 
@@ -124,7 +103,6 @@ function getAllSpecFiles(dir) {
     console.error(`Directory not found: ${dir}`);
     process.exit(1);
   }
-
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   let files = [];
 
@@ -164,7 +142,19 @@ function analyzeTests(testDir) {
     const stats = analyzeSpecFile(filePath);
     grandTotalTests += stats.totalTests;
     grandTotalSteps += stats.totalTestSteps;
-    allMetrics[suiteName] = stats;
+
+    // Map file paths in 'files' to relative paths for readability
+    const filesRelative = {};
+    for (const f in stats.files) {
+      filesRelative[path.relative(testDir, f).replace(/\\/g, "/")] = stats.files[f];
+    }
+
+    allMetrics[suiteName] = {
+      totalTests: stats.totalTests,
+      totalTestSteps: stats.totalTestSteps,
+      totalTestCases: stats.totalTestCases,
+      files: filesRelative,
+    };
   });
 
   allMetrics["_total"] = {
@@ -194,9 +184,23 @@ function analyzeSingleSpec(filePath) {
   const stats = analyzeSpecFile(filePath);
   const suiteName = path.basename(filePath, ".spec.ts");
 
+  const filesRelative = {};
+  for (const f in stats.files) {
+    filesRelative[path.relative(path.dirname(filePath), f).replace(/\\/g, "/")] = stats.files[f];
+  }
+
   const allMetrics = {
-    [suiteName]: stats,
-    _total: stats,
+    [suiteName]: {
+      totalTests: stats.totalTests,
+      totalTestSteps: stats.totalTestSteps,
+      totalTestCases: stats.totalTestCases,
+      files: filesRelative,
+    },
+    _total: {
+      totalTests: stats.totalTests,
+      totalTestSteps: stats.totalTestSteps,
+      totalTestCases: stats.totalTestCases,
+    },
   };
 
   const outputJsonPath = path.join(outputDir, "test-metrics.json");
