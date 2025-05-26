@@ -16,7 +16,7 @@ const parser = {
   },
 };
 
-function analyzeFile(filePath, visitedFiles, stats, perFileStats) {
+function analyzeFile(filePath, visitedFiles, stats) {
   if (visitedFiles.has(filePath)) return;
   visitedFiles.add(filePath);
 
@@ -34,12 +34,6 @@ function analyzeFile(filePath, visitedFiles, stats, perFileStats) {
     return;
   }
 
-  // Initialize stats for this file
-  perFileStats[filePath] = perFileStats[filePath] || {
-    totalTests: 0,
-    totalTestSteps: 0,
-  };
-
   recast.types.visit(ast, {
     visitImportDeclaration(pathNode) {
       const importPath = pathNode.node.source.value;
@@ -56,7 +50,7 @@ function analyzeFile(filePath, visitedFiles, stats, perFileStats) {
 
         for (const candidate of candidates) {
           if (fs.existsSync(candidate)) {
-            analyzeFile(candidate, visitedFiles, stats, perFileStats);
+            analyzeFile(candidate, visitedFiles, stats);
             break;
           }
         }
@@ -68,7 +62,6 @@ function analyzeFile(filePath, visitedFiles, stats, perFileStats) {
       const callee = pathNode.node.callee;
       if (callee?.type === "Identifier" && callee.name === "test") {
         stats.totalTests++;
-        perFileStats[filePath].totalTests++;
       }
       if (
         callee?.type === "MemberExpression" &&
@@ -76,7 +69,6 @@ function analyzeFile(filePath, visitedFiles, stats, perFileStats) {
         callee.property?.name === "step"
       ) {
         stats.totalTestSteps++;
-        perFileStats[filePath].totalTestSteps++;
       }
       this.traverse(pathNode);
     },
@@ -86,15 +78,13 @@ function analyzeFile(filePath, visitedFiles, stats, perFileStats) {
 function analyzeSpecFile(entryFilePath) {
   const visitedFiles = new Set();
   const stats = { totalTests: 0, totalTestSteps: 0 };
-  const perFileStats = {};
 
-  analyzeFile(entryFilePath, visitedFiles, stats, perFileStats);
+  analyzeFile(entryFilePath, visitedFiles, stats);
 
   return {
     totalTests: stats.totalTests,
     totalTestSteps: stats.totalTestSteps,
     totalTestCases: stats.totalTestSteps,
-    files: perFileStats,
   };
 }
 
@@ -142,19 +132,7 @@ function analyzeTests(testDir) {
     const stats = analyzeSpecFile(filePath);
     grandTotalTests += stats.totalTests;
     grandTotalSteps += stats.totalTestSteps;
-
-    // Map file paths in 'files' to relative paths for readability
-    const filesRelative = {};
-    for (const f in stats.files) {
-      filesRelative[path.relative(testDir, f).replace(/\\/g, "/")] = stats.files[f];
-    }
-
-    allMetrics[suiteName] = {
-      totalTests: stats.totalTests,
-      totalTestSteps: stats.totalTestSteps,
-      totalTestCases: stats.totalTestCases,
-      files: filesRelative,
-    };
+    allMetrics[suiteName] = stats;
   });
 
   allMetrics["_total"] = {
@@ -184,23 +162,9 @@ function analyzeSingleSpec(filePath) {
   const stats = analyzeSpecFile(filePath);
   const suiteName = path.basename(filePath, ".spec.ts");
 
-  const filesRelative = {};
-  for (const f in stats.files) {
-    filesRelative[path.relative(path.dirname(filePath), f).replace(/\\/g, "/")] = stats.files[f];
-  }
-
   const allMetrics = {
-    [suiteName]: {
-      totalTests: stats.totalTests,
-      totalTestSteps: stats.totalTestSteps,
-      totalTestCases: stats.totalTestCases,
-      files: filesRelative,
-    },
-    _total: {
-      totalTests: stats.totalTests,
-      totalTestSteps: stats.totalTestSteps,
-      totalTestCases: stats.totalTestCases,
-    },
+    [suiteName]: stats,
+    _total: stats,
   };
 
   const outputJsonPath = path.join(outputDir, "test-metrics.json");
