@@ -5,7 +5,7 @@ const path = require("path");
 const recast = require("recast");
 const babelParser = require("@babel/parser");
 const express = require("express");
-const htmlTemplate = require('./lib/html-template');
+const htmlTemplate = require("./lib/html-template");
 
 const parser = {
   parse(source) {
@@ -34,32 +34,53 @@ function analyzeFile(filePath, visitedFiles, stats) {
     return;
   }
 
+  const functionImportMap = new Map(); // functionName -> sourceFilePath
+
   recast.types.visit(ast, {
     visitImportDeclaration(pathNode) {
       const importPath = pathNode.node.source.value;
-      if (importPath.startsWith(".")) {
-        const dir = path.dirname(filePath);
-        const resolvedPath = path.resolve(dir, importPath);
-        const candidates = [
-          resolvedPath,
-          resolvedPath + ".ts",
-          resolvedPath + ".js",
-          path.join(resolvedPath, "index.ts"),
-          path.join(resolvedPath, "index.js"),
-        ];
+      if (!importPath.startsWith(".")) {
+        this.traverse(pathNode);
+        return;
+      }
 
-        for (const candidate of candidates) {
-          if (fs.existsSync(candidate)) {
-            analyzeFile(candidate, visitedFiles, stats);
-            break;
-          }
+      const dir = path.dirname(filePath);
+      const resolvedPath = path.resolve(dir, importPath);
+      const candidates = [
+        resolvedPath,
+        resolvedPath + ".ts",
+        resolvedPath + ".js",
+        path.join(resolvedPath, "index.ts"),
+        path.join(resolvedPath, "index.js"),
+      ];
+
+      let actualPath;
+      for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) {
+          actualPath = candidate;
+          break;
         }
       }
+
+      if (actualPath) {
+        for (const specifier of pathNode.node.specifiers) {
+          if (
+            specifier.type === "ImportDefaultSpecifier" ||
+            specifier.type === "ImportSpecifier"
+          ) {
+            functionImportMap.set(specifier.local.name, actualPath);
+          }
+        }
+        analyzeFile(actualPath, visitedFiles, stats);
+      }
+
       this.traverse(pathNode);
     },
 
     visitCallExpression(pathNode) {
       const callee = pathNode.node.callee;
+
+      // Count test() and test.step()
       if (callee?.type === "Identifier" && callee.name === "test") {
         stats.totalTests++;
       }
@@ -70,6 +91,16 @@ function analyzeFile(filePath, visitedFiles, stats) {
       ) {
         stats.totalTestSteps++;
       }
+
+      // Handle function calls like Dashboard(), QC(), etc.
+      if (callee?.type === "Identifier") {
+        const funcName = callee.name;
+        const targetFile = functionImportMap.get(funcName);
+        if (targetFile) {
+          analyzeFile(targetFile, visitedFiles, stats); // Recursive again!
+        }
+      }
+
       this.traverse(pathNode);
     },
   });
@@ -93,6 +124,7 @@ function getAllSpecFiles(dir) {
     console.error(`Directory not found: ${dir}`);
     process.exit(1);
   }
+
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   let files = [];
 
